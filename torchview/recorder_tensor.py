@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Iterable, Mapping, TypeVar
+from typing import Any, Iterable, Mapping, TypeVar, Optional, Sequence
 from collections.abc import Callable
 
 import torch
@@ -12,6 +12,9 @@ from .computation_node import ModuleNode, FunctionNode, TensorNode, NodeContaine
 from .computation_graph import ComputationGraph
 
 from .utils import OrderedSet
+
+import traceback
+import os
 
 # Needed for module wrapper and resetting
 _orig_module_forward = torch.nn.Module.__call__
@@ -89,7 +92,7 @@ def creation_ops_wrapper(
     return _func
 
 
-def module_forward_wrapper(model_graph: ComputationGraph) -> Callable[..., Any]:
+def module_forward_wrapper(model_graph: ComputationGraph, output_names: Optional[Sequence[str]]) -> Callable[..., Any]:
     '''Wrapper for forward functions of modules'''
     def _module_forward_wrapper(mod: nn.Module, *args: Any, **kwargs: Any) -> Any:
         '''Forward prop of module for RecorderTensor subclass
@@ -119,6 +122,12 @@ def module_forward_wrapper(model_graph: ComputationGraph) -> Callable[..., Any]:
         cur_node.set_input_shape(
             reduce_data_info([args, kwargs], collect_shape, [])
         )
+
+        stack = traceback.extract_stack()
+        cur_node.relpath = stack[-2].filename.split(os.getcwd() + '/')[-1].split('site-packages/')[-1]
+        cur_node.filename = stack[-2].filename
+        cur_node.lineno = stack[-2].lineno
+        cur_node.line = stack[-2].line.split('#')[0].replace('>', '&gt;').replace('<', '&lt;')
 
         # update context with current modules's context
         input_context.append({cur_node: []})
@@ -167,7 +176,17 @@ def module_forward_wrapper(model_graph: ComputationGraph) -> Callable[..., Any]:
             reduce_data_info(out, collect_tensor_node, NodeContainer())
         )
 
-        for output_node in output_nodes:
+        _output_names = output_names
+        if _output_names is not None and cur_depth == 0 and len(output_nodes) != len(_output_names):
+            for i, (out_1, output_name) in enumerate(zip(out, _output_names[:])):
+                if isinstance(out_1, (tuple, list)):
+                    converted_output_names = tuple(f'{output_name}_{j+1}' for j in range(len(out_1)))
+                    print(f"Warning: Output '{output_name}' is not a torch.Tensor, so its name is converted to {converted_output_names}")
+                    _output_names = _output_names[:i] + converted_output_names + _output_names[i+1:]
+
+        for i, output_node in enumerate(output_nodes):
+            if _output_names is not None and cur_depth == 0:
+                output_node.name = _output_names[i]
             cur_node.add_output_nodes(output_node)
             output_node.context = input_context
 
@@ -257,6 +276,20 @@ class RecorderTensor(torch.Tensor):
             func, cur_depth, args_nodes, name=func_name  # type: ignore[arg-type]
         )
 
+        stack = traceback.extract_stack()
+        source_index = -2
+    
+        if 'site-packages/' in stack[-2].filename:
+            for i in range(2, len(stack)+1):
+                if not 'site-packages/' in stack[-i].filename:
+                    source_index = -i
+                    break
+        
+        cur_node.relpath = stack[source_index].filename.split(os.getcwd() + '/')[-1].split('site-packages/')[-1]
+        cur_node.filename = stack[source_index].filename
+        cur_node.lineno = stack[source_index].lineno
+        cur_node.line = stack[source_index].line.split('#')[0].replace('>', '&gt;').replace('<', '&lt;')
+            
         for i in args_nodes:
             i.add_child(cur_node)
 

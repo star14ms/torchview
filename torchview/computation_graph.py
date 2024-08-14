@@ -65,8 +65,11 @@ class ComputationGraph:
         expand_nested: bool = False,
         hide_inner_tensors: bool = True,
         hide_module_functions: bool = True,
+        print_code_path: bool = False,
         roll: bool = True,
         depth: int | float = 3,
+        fontname: str = 'Linux libertine',
+        fontsize = 48,
     ):
         '''
         Resets the running_node_id, id_dict when a new ComputationGraph is initialized.
@@ -78,8 +81,11 @@ class ComputationGraph:
         self.expand_nested = expand_nested
         self.hide_inner_tensors = hide_inner_tensors
         self.hide_module_functions = hide_module_functions
+        self.print_code_path = print_code_path
         self.roll = roll
         self.depth = depth
+        self.fontname = fontname
+        self.fontsize = fontsize
 
         # specs for html table, needed for node labels
         self.html_config = {
@@ -178,7 +184,7 @@ class ComputationGraph:
             ) as cur_cont:
                 if display_nested:
                     cur_cont.attr(
-                        style='dashed', label=k.name, labeljust='l', fontsize='12'
+                        style='dashed', label=f'<<B>{k.name}</B>>', labeljust='l', fontsize=str(self.fontsize), fontname=self.fontname
                     )
                     new_kwargs = updated_dict(new_kwargs, 'subgraph', cur_cont)
                 for g in v:
@@ -369,8 +375,8 @@ class ComputationGraph:
         '''Returns html-like format for the label of node. This html-like
         label is based on Graphviz API for html-like format. For setting of node label
         it uses graph config and html_config.'''
-        input_str = 'input'
-        output_str = 'output'
+        input_str = 'in'
+        output_str = 'out'
         border = self.html_config['border']
         cell_sp = self.html_config['cell_spacing']
         cell_pad = self.html_config['cell_padding']
@@ -390,13 +396,12 @@ class ComputationGraph:
                     CELLSPACING="{cell_sp}" CELLPADDING="{cell_pad}">
                     <TR>
                         <TD ROWSPAN="2">{node.name}<BR/>depth:{node.depth}</TD>
-                        <TD COLSPAN="2">{input_str}:</TD>
-                        <TD COLSPAN="2">{input_repr} </TD>
+                        <TD COLSPAN="2">{input_str}: {input_repr}</TD>
                     </TR>
                     <TR>
-                        <TD COLSPAN="2">{output_str}: </TD>
-                        <TD COLSPAN="2">{output_repr} </TD>
+                        <TD COLSPAN="2">{output_str}: {output_repr}</TD>
                     </TR>
+                    {f'<TR><TD COLSPAN="3">{node.relpath}, line {node.lineno}<BR/>{node.line}</TD></TR>' if self.print_code_path and getattr(node, 'relpath', None) else ''}
                     </TABLE>>'''
         else:
             label = f'''<
@@ -408,7 +413,7 @@ class ComputationGraph:
 
     def resize_graph(
         self,
-        scale: float = 1.0,
+        scale: float = 2.0,
         size_per_element: float = 0.3,
         min_size: float = 12
     ) -> None:

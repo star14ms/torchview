@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import warnings
 from typing import (
     Sequence, Any, Mapping, Union, Callable, Iterable, Optional,
@@ -17,7 +18,6 @@ from .computation_node import TensorNode
 from .recorder_tensor import (
     module_forward_wrapper, _orig_module_forward, RecorderTensor,
     reduce_data_info, collect_tensor_node, Recorder
-
 )
 
 COMPILED_MODULES = (ScriptModule,)
@@ -50,6 +50,10 @@ def draw_graph(
     save_graph: bool = False,
     filename: str | None = None,
     directory: str = '.',
+    output_names: Optional[Sequence[str]] = None,
+    fontname: str = 'Linux libertine',
+    font_size: int = 48,
+    print_code_path: bool = False,
     **kwargs: Any,
 ) -> ComputationGraph:
     '''Returns visual representation of the input Pytorch Module with
@@ -214,12 +218,12 @@ def draw_graph(
 
     model_graph = ComputationGraph(
         visual_graph, input_nodes, show_shapes, expand_nested,
-        hide_inner_tensors, hide_module_functions, roll, depth
+        hide_inner_tensors, hide_module_functions, print_code_path, roll, depth, fontname, font_size
     )
 
     forward_prop(
         model, input_recorder_tensor, device, model_graph,
-        model_mode, **kwargs_record_tensor
+        model_mode, output_names, **kwargs_record_tensor
     )
 
     model_graph.fill_visual_graph()
@@ -235,6 +239,7 @@ def forward_prop(
     device: torch.device | str,
     model_graph: ComputationGraph,
     mode: str,
+    output_names: Optional[Sequence[str]],
     **kwargs: Any,
 ) -> None:
     '''Performs forward propagation of model on RecorderTensor
@@ -249,7 +254,7 @@ def forward_prop(
             raise RuntimeError(
                 f"Specified model mode not recognized: {mode}"
             )
-        new_module_forward = module_forward_wrapper(model_graph)
+        new_module_forward = module_forward_wrapper(model_graph, output_names)
         with Recorder(_orig_module_forward, new_module_forward, model_graph):
             with torch.no_grad():
                 if isinstance(x, (list, tuple)):
@@ -281,6 +286,8 @@ def process_input(
     kwargs_recorder_tensor = traverse_data(kwargs, get_recorder_tensor, type)
     if input_data is not None:
         x = set_device(input_data, device)
+        for x_one, input_data_one in zip(x, input_data):
+            x_one.label = getattr(input_data_one, 'label', None)
         x = traverse_data(x, get_recorder_tensor, type)
         if isinstance(x, RecorderTensor):
             x = [x]
@@ -393,7 +400,7 @@ def get_recorder_tensor(
     input_node = TensorNode(
         tensor=input_recorder_tensor,
         depth=0,
-        name='input-tensor',
+        name='input-tensor' if getattr(input_tensor, 'label', None) is None else input_tensor.label,
     )
 
     input_recorder_tensor.tensor_nodes.append(input_node)
@@ -445,3 +452,48 @@ def flatten(nested_array: INPUT_SIZE_TYPE) -> Iterator[Any]:
             yield from flatten(item)
         else:
             yield item
+
+
+def draw_graphs(model, inputs, min_depth=1, max_depth=10, directory='./model_viz/', hide_module_functions=True, print_code_path=False, input_names=None, output_names=None, fontname='Linux libertine', font_size=48):
+    base_filename = directory + model.__class__.__name__ + '.'
+    input_names = input_names if isinstance(input_names, (tuple, list)) else (input_names,)
+    output_names = output_names if isinstance(output_names, (tuple, list)) else (output_names,)
+
+    for input_1, input_name in zip(inputs, input_names):
+        input_1.label = input_name
+
+    for i in range(min_depth, max_depth+1):
+        draw_graph(
+            model, 
+            input_data=inputs,
+            expand_nested=True, 
+            depth=i, 
+            save_graph=True, 
+            graph_name=model.__class__.__name__ + '.' + f'{i}_depth',
+            directory=directory,
+            hide_module_functions=hide_module_functions,
+            print_code_path=print_code_path,
+            output_names=output_names,
+            fontname=fontname,
+            font_size=font_size
+        )
+        
+        current_file = base_filename + f'{i}_depth' + '.gv'
+
+        if i > min_depth:
+            previous_file = base_filename + f'{i-1}_depth' + '.gv'
+
+            # open previous saved .gv file and check text is same as current one
+            with open(current_file) as file:
+                data_pre = file.read()
+            with open(previous_file) as file:
+                data_cur = file.read()
+
+            if len(data_pre) == len(data_cur):
+                # remove current file
+                os.remove(current_file)
+                os.remove(current_file + '.png')
+                break
+
+        print(f'Graph for {i} depth is saved at {current_file}')
+
